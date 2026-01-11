@@ -1,6 +1,6 @@
 import os
 import time
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 
 import gradio as gr
 from dotenv import load_dotenv
@@ -22,13 +22,25 @@ If info is missing, state assumptions explicitly.
 Format output in Markdown with clear headings and bullets.
 """
 
+_GROQ_CLIENT: Optional[Groq] = None
+
 def _client() -> Groq:
-    api_key = os.getenv("GROQ_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("Missing GROQ_API_KEY. Set it as an environment variable and restart the app.")
-    return Groq(api_key=api_key)
+    """
+    Returns a singleton instance of the Groq client.
+    Raises RuntimeError if GROQ_API_KEY is not set.
+    """
+    global _GROQ_CLIENT
+    if _GROQ_CLIENT is None:
+        api_key = os.getenv("GROQ_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError("Missing GROQ_API_KEY. Set it as an environment variable and restart the app.")
+        _GROQ_CLIENT = Groq(api_key=api_key)
+    return _GROQ_CLIENT
 
 def call_groq(messages: List[Dict], model: str, temperature: float = 0.4, max_tokens: int = 900) -> str:
+    """
+    Calls the Groq API with the specified parameters.
+    """
     client = _client()
     # Chat Completions API via Groq SDK :contentReference[oaicite:2]{index=2}
     resp = client.chat.completions.create(
@@ -39,14 +51,18 @@ def call_groq(messages: List[Dict], model: str, temperature: float = 0.4, max_to
     )
     return resp.choices[0].message.content
 
-def robust_chat(messages: List[Dict], temperature: float = 0.4) -> Tuple[str, str, float]:
+def robust_chat(messages: List[Dict], temperature: float = 0.4, max_tokens: int = 900) -> Tuple[str, str, float]:
+    """
+    Attempts to get a response from Groq, falling back to other models on failure.
+    Returns: (response_text, model_used, latency_seconds)
+    """
     start = time.time()
     # try default model first, then fallbacks
     models_to_try = [DEFAULT_MODEL] + [m for m in FALLBACK_MODELS if m != DEFAULT_MODEL]
     last_err = None
     for m in models_to_try:
         try:
-            text = call_groq(messages, model=m, temperature=temperature)
+            text = call_groq(messages, model=m, temperature=temperature, max_tokens=max_tokens)
             return text, m, (time.time() - start)
         except Exception as e:
             last_err = e
@@ -54,6 +70,10 @@ def robust_chat(messages: List[Dict], temperature: float = 0.4) -> Tuple[str, st
     raise RuntimeError(f"All model attempts failed. Last error: {last_err}")
 
 def run_decision_arena(problem: str, risk_mode: str, depth: int) -> Tuple[str, str]:
+    """
+    Main orchestration function for the Decision Arena.
+    Runs Builder, Challenger, and Judge agents.
+    """
     problem = (problem or "").strip()
     if not problem:
         return "Please enter a decision/goal to analyze.", ""
@@ -76,7 +96,8 @@ def run_decision_arena(problem: str, risk_mode: str, depth: int) -> Tuple[str, s
             {"role": "user", "content": f"Decision/Goal:\n{problem}\n\nRisk preference: {risk_mode}\nDepth: {depth}/5"},
         ]
         start = time.time()
-        text, used_model, latency = robust_chat(messages, temperature=temp)
+        # Pass max_tokens to robust_chat
+        text, used_model, latency = robust_chat(messages, temperature=temp, max_tokens=max_tokens)
         # trim if needed (avoid insane outputs)
         return text.strip(), used_model, (time.time() - start)
 
@@ -113,7 +134,8 @@ Output MUST include:
     ]
 
     start = time.time()
-    judge_text, model_j, judge_latency = robust_chat(judge_messages, temperature=temp)
+    # Pass max_tokens to robust_chat for the Judge as well
+    judge_text, model_j, judge_latency = robust_chat(judge_messages, temperature=temp, max_tokens=max_tokens)
     used_models = f"Models used: Builder={model_b}, Challenger={model_c}, Judge={model_j} | Judge latency={judge_latency:.2f}s"
 
     final_md = f"""# 🧠 Decision Arena
