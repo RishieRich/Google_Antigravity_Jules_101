@@ -1,3 +1,8 @@
 # ARQ_antigravity_test_101
 
-This is an experiment with antigravity and jules by google
+# ARQ_antigravity_test_101
+
+This repository serves as an experimental sandbox for testing the capabilities of **Antigravity** and **Jules** by Google.
+
+## Author
+**Rishikesh R Pote**
